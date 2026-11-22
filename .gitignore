@@ -1,0 +1,11 @@
+# .NET / Visual Studio / macOS
+bin/
+obj/
+.vs/
+.vscode/
+.local/
+.aspnet/
+*.user
+*.suo
+*.cache
+.DS_Store

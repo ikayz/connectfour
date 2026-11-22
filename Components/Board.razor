@@ -1,0 +1,409 @@
+@using System.Drawing
+@inject GameState State
+
+<HeadContent>
+    <style>
+        :root {
+            --board-bg: @boardColorHex;
+            --player1: @player1ColorHex;
+            --player2: @player2ColorHex;
+        }
+    </style>
+</HeadContent>
+
+<div class="connect-four-app"
+     style="--board-bg: @boardColorHex; --player1: @player1ColorHex; --player2: @player2ColorHex;"
+     tabindex="0"
+     @onkeydown="HandleKeyDown"
+     aria-label="Connect Four game area. Use Left and Right arrow keys and Enter, or number keys 1 through 7, to drop a piece.">
+
+    <!-- Scoreboard & Consecutive Win Streak Tracker -->
+    <section class="scoreboard" aria-label="Scoreboard and win streaks">
+        <div class="score-card @(IsPlayerTurn(1) ? "active-turn" : "")">
+            <div class="score-header">
+                <span class="piece-swatch p1" aria-hidden="true"></span>
+                <span class="player-name">Player 1</span>
+                @if (IsPlayerTurn(1))
+                {
+                    <span class="turn-pill">Your Turn</span>
+                }
+            </div>
+            <div class="score-metrics">
+                <div class="metric">
+                    <span class="metric-value">@State.Player1Wins</span>
+                    <span class="metric-label">Wins</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value streak @(State.Player1Streak >= 2 ? "hot" : "")">
+                        @(State.Player1Streak >= 2 ? $"🔥 {State.Player1Streak}" : State.Player1Streak.ToString())
+                    </span>
+                    <span class="metric-label">Streak</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value">@State.Player1BestStreak</span>
+                    <span class="metric-label">Best</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="score-card ties-card">
+            <span class="metric-value">@State.Ties</span>
+            <span class="metric-label">Ties</span>
+            <button type="button"
+                    class="btn-link-reset"
+                    @onclick="ResetStats"
+                    disabled="@(State.Player1Wins == 0 && State.Player2Wins == 0 && State.Ties == 0)"
+                    title="Reset all win counts and streaks">
+                Reset Stats
+            </button>
+        </div>
+
+        <div class="score-card @(IsPlayerTurn(2) ? "active-turn" : "")">
+            <div class="score-header">
+                <span class="piece-swatch p2" aria-hidden="true"></span>
+                <span class="player-name">Player 2</span>
+                @if (IsPlayerTurn(2))
+                {
+                    <span class="turn-pill">Your Turn</span>
+                }
+            </div>
+            <div class="score-metrics">
+                <div class="metric">
+                    <span class="metric-value">@State.Player2Wins</span>
+                    <span class="metric-label">Wins</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value streak @(State.Player2Streak >= 2 ? "hot" : "")">
+                        @(State.Player2Streak >= 2 ? $"🔥 {State.Player2Streak}" : State.Player2Streak.ToString())
+                    </span>
+                    <span class="metric-label">Streak</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value">@State.Player2BestStreak</span>
+                    <span class="metric-label">Best</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Status Banner -->
+    <article class="status-bar" role="status" aria-live="polite">
+        <div class="status-message">
+            @if (!string.IsNullOrEmpty(winnerMessage))
+            {
+                <span class="winner-banner">@winnerMessage</span>
+            }
+            else
+            {
+                <span class="piece-swatch @(State.PlayerTurn == 1 ? "p1" : "p2")" aria-hidden="true"></span>
+                <span>@CurrentTurn</span>
+            }
+        </div>
+
+        <div class="status-actions">
+            <button type="button"
+                    class="btn-reset @(string.IsNullOrEmpty(winnerMessage) ? "subtle" : "primary")"
+                    @onclick="ResetGame">
+                @(string.IsNullOrEmpty(winnerMessage) ? "Reset Board" : "Play Again")
+            </button>
+        </div>
+    </article>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="error-banner" role="alert">@errorMessage</div>
+    }
+
+    <!-- Main Game Area: Board + Side Panel (Color Customization & Move History) -->
+    <div class="game-layout">
+        <div class="board-column">
+            <!-- Column Drop Controls -->
+            <nav class="drop-controls" aria-label="Drop a piece into a column">
+                @for (byte i = 0; i < 7; i++)
+                {
+                    var col = i;
+                    bool isDisabled = !string.IsNullOrEmpty(winnerMessage) || State.IsColumnFull(col);
+                    bool isSelected = selectedCol == col && !isDisabled;
+                    <button type="button"
+                            class="drop-btn @(isSelected ? "selected" : "") @(State.PlayerTurn == 1 ? "p1-hover" : "p2-hover")"
+                            title="Drop piece in column @(col + 1) (Key @(col + 1))"
+                            aria-label="@GetDropButtonAriaLabel(col)"
+                            disabled="@isDisabled"
+                            @onmouseover="() => selectedCol = col"
+                            @onfocus="() => selectedCol = col"
+                            @onclick="() => PlayPiece(col)">
+                        <span class="drop-arrow" aria-hidden="true">▼</span>
+                        <span class="col-num">@(col + 1)</span>
+                    </button>
+                }
+            </nav>
+
+            <!-- Connect Four Board -->
+            <div class="board-frame">
+                <div class="board" role="grid" aria-label="Connect Four 7 by 6 game board">
+                    @for (var i = 0; i < 42; i++)
+                    {
+                        <span class="container" role="gridcell" aria-label="@GetCellAriaLabel(i)">
+                            <span></span>
+                        </span>
+                    }
+
+                    @for (var i = 0; i < 42; i++)
+                    {
+                        if (!string.IsNullOrEmpty(pieces[i]))
+                        {
+                            <span class="@GetPieceCssClass(i)"></span>
+                        }
+                    }
+                </div>
+            </div>
+
+            <p class="keyboard-hint">
+                Keyboard: <kbd>←</kbd> <kbd>→</kbd> to aim, <kbd>Enter</kbd>/<kbd>Space</kbd> to drop, or press <kbd>1</kbd>–<kbd>7</kbd>. Press <kbd>R</kbd> to reset.
+            </p>
+        </div>
+
+        <!-- Side Panel: Color Customizer + Move History -->
+        <aside class="side-panel">
+            <!-- Piece & Board Color Customizer -->
+            <section class="panel-card" aria-label="Customize game colors">
+                <h3 class="panel-title">Customize Colors</h3>
+                <div class="color-pickers">
+                    <label class="color-field">
+                        <span>Player 1</span>
+                        <input type="color"
+                               value="@player1ColorHex"
+                               @oninput="OnPlayer1ColorChanged"
+                               aria-label="Choose Player 1 piece color" />
+                    </label>
+                    <label class="color-field">
+                        <span>Player 2</span>
+                        <input type="color"
+                               value="@player2ColorHex"
+                               @oninput="OnPlayer2ColorChanged"
+                               aria-label="Choose Player 2 piece color" />
+                    </label>
+                    <label class="color-field">
+                        <span>Board</span>
+                        <input type="color"
+                               value="@boardColorHex"
+                               @oninput="OnBoardColorChanged"
+                               aria-label="Choose game board color" />
+                    </label>
+                </div>
+
+                @if (string.Equals(player1ColorHex, player2ColorHex, StringComparison.OrdinalIgnoreCase))
+                {
+                    <p class="color-warning" role="alert">
+                        Player 1 and Player 2 have the same color — pick distinct colors for better visibility.
+                    </p>
+                }
+
+                <div class="preset-row" aria-label="Color theme presets">
+                    <button type="button" class="preset-btn" @onclick='() => ApplyPreset("#1d4ed8", "#dc2626", "#facc15")'>Classic</button>
+                    <button type="button" class="preset-btn" @onclick='() => ApplyPreset("#0f172a", "#10b981", "#a855f7")'>Neon Dark</button>
+                    <button type="button" class="preset-btn" @onclick='() => ApplyPreset("#1e293b", "#f97316", "#38bdf8")'>High Contrast</button>
+                    <button type="button" class="preset-btn" @onclick='() => ApplyPreset("#3f3f46", "#ec4899", "#22c55e")'>Berry Mint</button>
+                </div>
+            </section>
+
+            <!-- Move History List -->
+            <section class="panel-card history-card" aria-label="Current game move history">
+                <div class="panel-header-row">
+                    <h3 class="panel-title">Move History</h3>
+                    <span class="move-count">@State.MoveHistory.Count / 42</span>
+                </div>
+
+                @if (State.MoveHistory.Count == 0)
+                {
+                    <p class="empty-history">No moves yet. Drop a piece in any column to begin!</p>
+                }
+                else
+                {
+                    <ol class="move-list">
+                        @foreach (var move in State.MoveHistory.AsEnumerable().Reverse())
+                        {
+                            <li class="move-item @(move.MoveNumber == State.MoveHistory.Count ? "latest" : "")">
+                                <span class="move-num">#@move.MoveNumber</span>
+                                <span class="piece-swatch small @(move.Player == 1 ? "p1" : "p2")" aria-hidden="true"></span>
+                                <span class="move-player">Player @move.Player</span>
+                                <span class="move-coords">Col @move.Column, Row @move.Row</span>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+        </aside>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public Color BoardColor { get; set; } = ColorTranslator.FromHtml("#1d4ed8");
+
+    [Parameter]
+    public Color Player1Color { get; set; } = ColorTranslator.FromHtml("#dc2626");
+
+    [Parameter]
+    public Color Player2Color { get; set; } = ColorTranslator.FromHtml("#facc15");
+
+    private string boardColorHex = "#1d4ed8";
+    private string player1ColorHex = "#dc2626";
+    private string player2ColorHex = "#facc15";
+
+    private string[] pieces = new string[42];
+    private int[] pieceCellIndices = new int[42];
+    private string winnerMessage = string.Empty;
+    private string errorMessage = string.Empty;
+    private byte selectedCol = 3;
+
+    private string CurrentTurn => string.IsNullOrEmpty(winnerMessage)
+        ? $"Player {State.PlayerTurn}'s Turn"
+        : string.Empty;
+
+    protected override void OnInitialized()
+    {
+        State.ResetBoard();
+        boardColorHex = ToHex(BoardColor, "#1d4ed8");
+        player1ColorHex = ToHex(Player1Color, "#dc2626");
+        player2ColorHex = ToHex(Player2Color, "#facc15");
+        Array.Fill(pieceCellIndices, -1);
+    }
+
+    private void PlayPiece(byte col)
+    {
+        errorMessage = string.Empty;
+        try
+        {
+            var player = State.PlayerTurn;
+            var turn = State.CurrentTurn;
+            var landingRow = State.PlayPiece(col);
+
+            pieces[turn] = $"player{player} col{col} drop{landingRow}";
+            pieceCellIndices[turn] = (landingRow - 1) * 7 + col;
+            selectedCol = col;
+        }
+        catch (ArgumentException ex)
+        {
+            errorMessage = ex.Message;
+        }
+
+        winnerMessage = State.CheckForWin() switch
+        {
+            GameState.WinState.Player1_Wins => "Player 1 Wins!",
+            GameState.WinState.Player2_Wins => "Player 2 Wins!",
+            GameState.WinState.Tie => "It's a tie!",
+            _ => string.Empty
+        };
+    }
+
+    private void ResetGame()
+    {
+        State.ResetBoard();
+        winnerMessage = string.Empty;
+        errorMessage = string.Empty;
+        pieces = new string[42];
+        pieceCellIndices = new int[42];
+        Array.Fill(pieceCellIndices, -1);
+    }
+
+    private void ResetStats()
+    {
+        State.ResetStats();
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "r" or "R")
+        {
+            ResetGame();
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(winnerMessage))
+            return;
+
+        switch (e.Key)
+        {
+            case "ArrowLeft":
+                selectedCol = (byte)((selectedCol + 6) % 7);
+                break;
+            case "ArrowRight":
+                selectedCol = (byte)((selectedCol + 1) % 7);
+                break;
+            case "Enter":
+            case " ":
+            case "ArrowDown":
+                PlayPiece(selectedCol);
+                break;
+            case "1":
+            case "2":
+            case "3":
+            case "4":
+            case "5":
+            case "6":
+            case "7":
+                PlayPiece((byte)(e.Key[0] - '1'));
+                break;
+        }
+    }
+
+    private void OnPlayer1ColorChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string hex && !string.IsNullOrWhiteSpace(hex))
+            player1ColorHex = hex;
+    }
+
+    private void OnPlayer2ColorChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string hex && !string.IsNullOrWhiteSpace(hex))
+            player2ColorHex = hex;
+    }
+
+    private void OnBoardColorChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string hex && !string.IsNullOrWhiteSpace(hex))
+            boardColorHex = hex;
+    }
+
+    private void ApplyPreset(string board, string p1, string p2)
+    {
+        boardColorHex = board;
+        player1ColorHex = p1;
+        player2ColorHex = p2;
+    }
+
+    private bool IsPlayerTurn(int player) =>
+        string.IsNullOrEmpty(winnerMessage) && State.PlayerTurn == player;
+
+    private string GetPieceCssClass(int turnIndex)
+    {
+        var baseClass = pieces[turnIndex];
+        if (pieceCellIndices[turnIndex] >= 0 && State.WinningCells.Contains(pieceCellIndices[turnIndex]))
+        {
+            return $"{baseClass} winning";
+        }
+        return baseClass;
+    }
+
+    private string GetDropButtonAriaLabel(byte col) =>
+        State.IsColumnFull(col)
+            ? $"Drop piece in column {col + 1} (full)"
+            : $"Drop piece in column {col + 1}";
+
+    private string GetCellAriaLabel(int cellIndex)
+    {
+        int row = cellIndex / 7 + 1;
+        int col = cellIndex % 7 + 1;
+        string occupant = State.TheBoard[cellIndex] switch
+        {
+            1 => "Player 1 piece",
+            2 => "Player 2 piece",
+            _ => "Empty"
+        };
+        return $"Row {row}, Column {col}: {occupant}";
+    }
+
+    private static string ToHex(Color c, string fallback) =>
+        c.IsEmpty ? fallback : $"#{c.R:X2}{c.G:X2}{c.B:X2}".ToLowerInvariant();
+}
